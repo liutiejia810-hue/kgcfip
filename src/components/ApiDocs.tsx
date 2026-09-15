@@ -4,17 +4,27 @@ import { Copy, Key, FileDown, Loader2, FileText } from 'lucide-react';
 
 interface ApiDocsProps {
     apiToken: string;
+    selectedScenes: string[];
 }
 
 interface ExportFile {
     key: string;
     colo?: string;
+    country?: string;
+    countryName?: string;
     count: number;
     url: string | null;
 }
 
-export function ApiDocs({ apiToken }: ApiDocsProps) {
+export function ApiDocs({ apiToken, selectedScenes }: ApiDocsProps) {
     const { showToast } = useToast();
+
+    // 仅导出「已选中的场景」：与「已保存的 IP/域名 列表」的场景过滤联动
+    const [onlySelected, setOnlySelected] = useState(true);
+
+    const scenesQuery = (onlySelected && selectedScenes.length > 0)
+        ? `&scenes=${encodeURIComponent(selectedScenes.join(','))}`
+        : '';
 
     // ---------- 分类文本直链导出 ----------
     const [exporting, setExporting] = useState(false);
@@ -30,7 +40,7 @@ export function ApiDocs({ apiToken }: ApiDocsProps) {
         setExporting(true);
         setExportError('');
         try {
-            const res = await fetch(`${window.location.origin}/api/export?token=${apiToken}`);
+            const res = await fetch(`${window.location.origin}/api/export?token=${apiToken}${scenesQuery}`);
             const status = res.status;
             const data = (await res.json().catch(() => ({}))) as {
                 ok?: boolean; error?: string; total?: number; files?: ExportFile[];
@@ -62,11 +72,11 @@ export function ApiDocs({ apiToken }: ApiDocsProps) {
             </p>
             <div className="flex items-center gap-2">
                 <div className="flex-1 px-3 py-2 bg-gray-100 dark:bg-gray-700 rounded text-sm font-mono text-gray-800 dark:text-gray-200 break-all border border-gray-200 dark:border-gray-600">
-                    {window.location.origin}/api/getips?token={apiToken || '请重新登录获取Token'}
+                    {window.location.origin}/api/getips?token={apiToken || '请重新登录获取Token'}{scenesQuery}
                 </div>
                 <button
                     onClick={() => {
-                        const url = `${window.location.origin}/api/getips?token=${apiToken}`;
+                        const url = `${window.location.origin}/api/getips?token=${apiToken}${scenesQuery}`;
                         navigator.clipboard.writeText(url).then(() => showToast('API地址已复制', 'success'));
                     }}
                     disabled={!apiToken}
@@ -81,6 +91,7 @@ export function ApiDocs({ apiToken }: ApiDocsProps) {
             </p>
             <ul className="text-sm text-gray-500 dark:text-gray-400 list-disc list-inside space-y-1 mb-4">
                 <li><code>scene=场景名称</code>: 按场景名称筛选，例如 <code>scene=家庭电信</code></li>
+                <li><code>scenes=场景1,场景2</code>: 同时按多个场景筛选（逗号分隔；与上方「已保存列表」的选中项联动）</li>
                 <li><code>latency=毫秒数</code>: 筛选延迟小于等于指定值的IP，例如 <code>latency=200</code></li>
                 <li><code>region=地区代码</code>: 按Cloudflare地区代码筛选 (例如: LAX, SJC)，不区分大小写。例如 <code>region=SJC</code></li>
                 <li><code>count=数量</code>: 返回指定数量的IP（按延迟排序），例如 <code>count=10</code></li>
@@ -92,6 +103,26 @@ export function ApiDocs({ apiToken }: ApiDocsProps) {
                     {`${window.location.origin}/api/getips?token=${apiToken || 'TOKEN'}&scene=家庭电信&latency=200&region=SJC&count=10`}
             </div>
 
+            <div className="mt-4 p-3 bg-indigo-50 dark:bg-indigo-900/20 border border-indigo-200 dark:border-indigo-700/50 rounded-lg">
+                <label className="flex items-center gap-2 cursor-pointer select-none">
+                    <input
+                        type="checkbox"
+                        checked={onlySelected}
+                        onChange={(e) => setOnlySelected(e.target.checked)}
+                        className="h-4 w-4 rounded border-gray-300 text-purple-600 focus:ring-purple-500"
+                    />
+                    <span className="text-sm text-gray-700 dark:text-gray-200">
+                        仅导出已选中的场景
+                        {selectedScenes.length > 0
+                            ? `（${selectedScenes.length} 个：${selectedScenes.join('、')}）`
+                            : '（当前列表未选中任何场景，将导出全部）'}
+                    </span>
+                </label>
+                <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">
+                    取消勾选则导出全部已保存场景；勾选后，API 接口与文本直链都只包含上方「已保存的 IP/域名 列表」里选中的场景。
+                </p>
+            </div>
+
             {/* ============ 分类文本直链导出（R2） ============ */}
             <div className="mt-6 pt-5 border-t border-gray-200 dark:border-gray-600">
                 <div className="flex items-start justify-between gap-3 mb-3 flex-wrap">
@@ -101,7 +132,7 @@ export function ApiDocs({ apiToken }: ApiDocsProps) {
                             分类文本直链
                         </h3>
                         <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">
-                            把已保存的 IP 导出成「全部 + 按地区」的分类 txt，写入你绑定的 R2 桶，用固定直链直接访问。
+                            把已保存的 IP 导出成「全部 + 按国家」的分类 txt，写入你绑定的 R2 桶，用固定直链直接访问。
                         </p>
                     </div>
                     <button
@@ -141,7 +172,7 @@ export function ApiDocs({ apiToken }: ApiDocsProps) {
                                         {f.key}
                                     </span>
                                     <span className="px-1.5 py-0.5 text-[10px] rounded bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300 flex-none">
-                                        {f.colo || '全部'}
+                                        {f.countryName || (f.key === 'all.txt' ? '全部' : (f.colo || '未知'))}
                                     </span>
                                     <span className="text-[10px] text-gray-400 flex-none">{f.count} 条</span>
                                     <span className="flex-1 min-w-0 truncate text-[11px] font-mono text-gray-500 dark:text-gray-400">

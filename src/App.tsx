@@ -15,6 +15,8 @@ function App() {
   const [refreshKey, setRefreshKey] = useState(0);
   const [scanResults, setScanResults] = useState<ScanResult[]>([]);
   const [theme, setTheme] = useState<'light' | 'dark' | 'system'>('system');
+  // 「已保存的 IP/域名 列表」中选中的场景，提升到此处以便与 API接口 / 文本直链 联动
+  const [selectedScenes, setSelectedScenes] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     const savedAuth = localStorage.getItem('auth_token');
@@ -139,9 +141,9 @@ function App() {
           <ScannerConfig cfIps={cfIps} onScanComplete={setScanResults} />
           <ScannerResults scanResults={scanResults} onSaveSuccess={() => setRefreshKey(k => k + 1)} />
 
-          <SavedIpList key={refreshKey} />
+          <SavedIpList key={refreshKey} selectedScenes={selectedScenes} onSelectedScenesChange={setSelectedScenes} />
 
-          <ApiDocs apiToken={publicApiToken} />
+          <ApiDocs apiToken={publicApiToken} selectedScenes={Array.from(selectedScenes)} />
         </main>
         
         <footer className="text-center mt-12 pb-8">

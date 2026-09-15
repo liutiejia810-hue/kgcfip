@@ -4,6 +4,7 @@ import {
   ScanResult,
   getLatencyColor,
 } from '../utils/scanner';
+import { getColoCountry, getCountryName, getFlagUrl } from '../utils/colo';
 import { useToast } from './Toast';
 import { ListFilter, Save } from 'lucide-react';
 import { RegionDisplay } from './RegionDisplay';
@@ -31,30 +32,40 @@ export function ScannerResults({ scanResults, onSaveSuccess }: IpScannerResultsA
     const [isRegionLimitEnabled, setIsRegionLimitEnabled] = useState(false);
     const [latencyFilterValue, setLatencyFilterValue] = useState<string>('300');
     const [latencyFilterError, setLatencyFilterError] = useState<string>('');
+    // 带宽速度筛选 / TOP-N
+    const [isSpeedFilterEnabled, setIsSpeedFilterEnabled] = useState(false);
+    const [speedFilterValue, setSpeedFilterValue] = useState<string>('5');
+    const [speedFilterError, setSpeedFilterError] = useState<string>('');
+    const [isSpeedTopEnabled, setIsSpeedTopEnabled] = useState(false);
+    const [speedTopValue, setSpeedTopValue] = useState<string>('10');
+    const [speedTopError, setSpeedTopError] = useState<string>('');
     const [isSaving, setIsSaving] = useState(false);
     const [sceneName, setSceneName] = useState('');
     const [scenes, setScenes] = useState<string[]>([]);
     const [sceneDropdownOpen, setSceneDropdownOpen] = useState(false);
     const sceneInputRef = useRef<HTMLDivElement>(null);
     const [saveMode, setSaveMode] = useState<'overwrite' | 'append'>('overwrite');
-    const [selectedRegions, setSelectedRegions] = useState<Set<string>>(new Set());
+    const [selectedCountries, setSelectedCountries] = useState<Set<string>>(new Set());
     const [selectedPorts, setSelectedPorts] = useState<Set<string>>(new Set());
     const filterInitialized = useRef(false);
 
-    const uniqueRegions: string[] = Array.from(new Set(scanResults.map(r => r.colo))).filter((r): r is string => !!r).sort();
+    // 按国家聚合（去城市维度）：从 colo 推导国家代码
+    const uniqueCountries: string[] = Array.from(
+        new Set(scanResults.map(r => (r.colo ? getColoCountry(r.colo) : null)).filter((c): c is string => !!c))
+    ).sort();
     const uniquePorts: number[] = Array.from(new Set(scanResults.map(r => r.port))).sort((a, b) => a - b);
 
     // 本轮结果是否包含下载速率数据（未开启下载测速时不显示「速度」列，避免干扰）
     const hasSpeedData = scanResults.some(r => typeof r.speedMbps === 'number' && r.speedMbps >= 0);
 
-    // 结果首次就绪时，默认将全部地区/端口选入集合（真正全选，而非空集代表全选）
+    // 结果首次就绪时，默认将全部国家/端口选入集合（真正全选，而非空集代表全选）
     useEffect(() => {
-        if (!filterInitialized.current && uniqueRegions.length > 0) {
-            setSelectedRegions(new Set(uniqueRegions));
+        if (!filterInitialized.current && uniqueCountries.length > 0) {
+            setSelectedCountries(new Set(uniqueCountries));
             setSelectedPorts(new Set(uniquePorts.map(String)));
             filterInitialized.current = true;
         }
-    }, [uniqueRegions, uniquePorts]);
+    }, [uniqueCountries, uniquePorts]);
 
     // 加载已保存场景名列表，供场景录入框快速选择
     useEffect(() => {
@@ -92,6 +103,14 @@ export function ScannerResults({ scanResults, onSaveSuccess }: IpScannerResultsA
     const isIpsPerRegionFormatValid = /^\d+$/.test(ipsPerRegionTrim) && parseInt(ipsPerRegionTrim, 10) >= 1;
     const effectiveIpsPerRegion = isIpsPerRegionFormatValid ? parseInt(ipsPerRegionTrim, 10) : DEFAULT_IPS_PER_REGION;
 
+    const speedTrim = speedFilterValue.trim();
+    const isSpeedFormatValid = /^\d+(\.\d+)?$/.test(speedTrim);
+    const effectiveSpeed = isSpeedFormatValid ? parseFloat(speedTrim) : 0;
+
+    const speedTopTrim = speedTopValue.trim();
+    const isSpeedTopFormatValid = /^\d+$/.test(speedTopTrim) && parseInt(speedTopTrim, 10) >= 1;
+    const effectiveSpeedTop = isSpeedTopFormatValid ? parseInt(speedTopTrim, 10) : 0;
+
     const baseFilteredResults = scanResults.filter(r => isLatencyFilterEnabled
         ? (isLatencyFormatValid && r.latency > -1 && r.latency <= effectiveLatencyValue)
         : true
@@ -108,31 +127,52 @@ export function ScannerResults({ scanResults, onSaveSuccess }: IpScannerResultsA
         selectedPorts.has(String(r.port))
     );
 
-  const regionCounts = portFilteredResults.reduce((acc, r) => {
-        if (r.colo) {
-            acc[r.colo] = (acc[r.colo] || 0) + 1;
+    // 按国家筛选（去城市维度）：从 colo 推导国家代码
+    const countryCounts = portFilteredResults.reduce((acc, r) => {
+        const c = r.colo ? getColoCountry(r.colo) : null;
+        if (c) {
+            acc[c] = (acc[c] || 0) + 1;
         }
         return acc;
     }, {} as Record<string, number>);
 
-    const filteredResults = portFilteredResults.filter(r =>
-        r.colo ? selectedRegions.has(r.colo) : true
-    );
+    const filteredResults = portFilteredResults.filter(r => {
+        const c = r.colo ? getColoCountry(r.colo) : null;
+        return c ? selectedCountries.has(c) : true;
+    });
 
-    let limitedResults = [...filteredResults];
+    // 带宽速度筛选：仅保留速度 >= 阈值的 IP（未测速的将被排除）
+    let speedFilteredResults = filteredResults;
+    if (isSpeedFilterEnabled) {
+        speedFilteredResults = filteredResults.filter(r =>
+            typeof r.speedMbps === 'number' && r.speedMbps >= effectiveSpeed
+        );
+    }
+
+    // 每个国家保留 N 个
+    let limitedResults = [...speedFilteredResults];
     if (isRegionLimitEnabled) {
-        const regionCountsForLimit: { [key: string]: number } = {};
-        limitedResults = filteredResults.filter(r => {
-            const colo = r.colo || 'Unknown';
-            regionCountsForLimit[colo] = (regionCountsForLimit[colo] || 0) + 1;
-            return regionCountsForLimit[colo] <= effectiveIpsPerRegion;
+        const countsForLimit: { [key: string]: number } = {};
+        limitedResults = speedFilteredResults.filter(r => {
+            const c = (r.colo ? getColoCountry(r.colo) : null) || 'Unknown';
+            countsForLimit[c] = (countsForLimit[c] || 0) + 1;
+            return countsForLimit[c] <= effectiveIpsPerRegion;
         });
+    }
+
+    // 带宽速度 TOP-N（按速度降序取前 N，未测速的排最后）
+    let finalResults = [...limitedResults];
+    if (isSpeedTopEnabled) {
+        const withSpeed = limitedResults
+            .filter(r => typeof r.speedMbps === 'number' && r.speedMbps >= 0)
+            .sort((a, b) => (b.speedMbps ?? 0) - (a.speedMbps ?? 0));
+        finalResults = withSpeed.slice(0, effectiveSpeedTop);
     }
 
     const { showToast } = useToast();
 
     const handleSave = async () => {
-        if (filteredResults.length === 0) {
+        if (finalResults.length === 0) {
             showToast('没有可保存的结果。', 'warning');
             return;
         }
@@ -144,7 +184,7 @@ export function ScannerResults({ scanResults, onSaveSuccess }: IpScannerResultsA
 
         setIsSaving(true);
         try{
-            const dataToSave = limitedResults.map(({ isAvailable, ...rest }) => rest);
+            const dataToSave = finalResults.map(({ isAvailable, ...rest }) => rest);
             await saveResults(sceneName.trim(), dataToSave as ScanResult[], saveMode);
             showToast(`场景 "${sceneName.trim()}" 保存成功！\n共 ${limitedResults.length} 个IP/域名\n模式: ${saveMode === 'overwrite' ? '覆盖' : '追加'}`, 'success');
             if (onSaveSuccess) onSaveSuccess();
@@ -213,7 +253,7 @@ export function ScannerResults({ scanResults, onSaveSuccess }: IpScannerResultsA
                                         }}
                                         className="h-4 w-4 rounded border-gray-300 text-purple-600 focus:ring-purple-500"
                                     />
-                                    <label htmlFor="region-limit-enable" className="text-sm text-gray-600 dark:text-gray-300 cursor-pointer select-none">每个地区保留</label>
+                                    <label htmlFor="region-limit-enable" className="text-sm text-gray-600 dark:text-gray-300 cursor-pointer select-none">每个国家保留</label>
                                 </div>
                                 <div className="flex items-center gap-2">
                                     <input
@@ -227,20 +267,82 @@ export function ScannerResults({ scanResults, onSaveSuccess }: IpScannerResultsA
                                     <span className="text-sm text-gray-600 dark:text-gray-300">个</span>
                                     {ipsPerRegionError && <span className="text-red-500 text-xs">{ipsPerRegionError}</span>}
                                 </div>
+                                {hasSpeedData && (
+                                <>
+                                    <div className="flex items-center gap-2">
+                                        <input
+                                            id="speed-filter-enable"
+                                            type="checkbox"
+                                            checked={isSpeedFilterEnabled}
+                                            onChange={(e) => {
+                                                if (e.target.checked && !isSpeedFormatValid) {
+                                                    setSpeedFilterError('请输入有效的数字');
+                                                    return;
+                                                }
+                                                setSpeedFilterError('');
+                                                setIsSpeedFilterEnabled(e.target.checked);
+                                            }}
+                                            className="h-4 w-4 rounded border-gray-300 text-purple-600 focus:ring-purple-500"
+                                        />
+                                        <label htmlFor="speed-filter-enable" className="text-sm text-gray-600 dark:text-gray-300 cursor-pointer select-none">带宽速度 ≥</label>
+                                    </div>
+                                    <div className="flex items-center gap-2">
+                                        <input
+                                            id="speed-filter-value"
+                                            type="text"
+                                            value={speedFilterValue}
+                                            onChange={(e) => { setSpeedFilterValue(e.target.value); if (speedFilterError) setSpeedFilterError(''); }}
+                                            className="p-1 border rounded-md w-20 text-sm dark:bg-gray-600 dark:border-gray-500 dark:text-white disabled:bg-gray-200 dark:disabled:bg-gray-800"
+                                            disabled={!isSpeedFilterEnabled}
+                                        />
+                                        <span className="text-sm text-gray-600 dark:text-gray-300">Mbps</span>
+                                        {speedFilterError && <span className="text-red-500 text-xs">{speedFilterError}</span>}
+                                    </div>
+                                    <div className="flex items-center gap-2">
+                                        <input
+                                            id="speed-top-enable"
+                                            type="checkbox"
+                                            checked={isSpeedTopEnabled}
+                                            onChange={(e) => {
+                                                if (e.target.checked && !isSpeedTopFormatValid) {
+                                                    setSpeedTopError('请输入大于等于1的整数');
+                                                    return;
+                                                }
+                                                setSpeedTopError('');
+                                                setIsSpeedTopEnabled(e.target.checked);
+                                            }}
+                                            className="h-4 w-4 rounded border-gray-300 text-purple-600 focus:ring-purple-500"
+                                        />
+                                        <label htmlFor="speed-top-enable" className="text-sm text-gray-600 dark:text-gray-300 cursor-pointer select-none">带宽速度 TOP</label>
+                                    </div>
+                                    <div className="flex items-center gap-2">
+                                        <input
+                                            id="speed-top-value"
+                                            type="text"
+                                            value={speedTopValue}
+                                            onChange={(e) => { setSpeedTopValue(e.target.value); if (speedTopError) setSpeedTopError(''); }}
+                                            className="p-1 border rounded-md w-20 text-sm dark:bg-gray-600 dark:border-gray-500 dark:text-white disabled:bg-gray-200 dark:disabled:bg-gray-800"
+                                            disabled={!isSpeedTopEnabled}
+                                        />
+                                        <span className="text-sm text-gray-600 dark:text-gray-300">个</span>
+                                        {speedTopError && <span className="text-red-500 text-xs">{speedTopError}</span>}
+                                    </div>
+                                </>
+                                )}
                             </div>
                         </div>
 
                         <div className="flex items-center justify-between mb-2">
-                            <h3 className="text-sm font-bold text-gray-700 dark:text-gray-200">按地区筛选</h3>
+                            <h3 className="text-sm font-bold text-gray-700 dark:text-gray-200">按国家筛选</h3>
                             <div className="flex items-center gap-3">
                                 <button 
-                                    onClick={() => setSelectedRegions(new Set(uniqueRegions))}
+                                    onClick={() => setSelectedCountries(new Set(uniqueCountries))}
                                     className="px-3 py-1 text-xs font-medium text-blue-800 bg-blue-100 rounded-full hover:bg-blue-200 dark:bg-blue-900 dark:text-blue-300 dark:hover:bg-blue-800 transition-colors"
                                 >
                                     全选
                                 </button>
                                 <button 
-                                    onClick={() => setSelectedRegions(new Set())}
+                                    onClick={() => setSelectedCountries(new Set())}
                                     className="px-3 py-1 text-xs font-medium text-gray-800 bg-gray-100 rounded-full hover:bg-gray-200 dark:bg-gray-600 dark:text-gray-300 dark:hover:bg-gray-500 transition-colors"
                                 >
                                     清空
@@ -248,22 +350,23 @@ export function ScannerResults({ scanResults, onSaveSuccess }: IpScannerResultsA
                             </div>
                         </div>
                         <div className="flex flex-wrap gap-2">
-                            {uniqueRegions.map(region => {
-                                const countForRegion = regionCounts[region] || 0;
-                                const displayCount = isRegionLimitEnabled ? Math.min(countForRegion, effectiveIpsPerRegion) : countForRegion;
-                                const isSelected = selectedRegions.has(region);
+                            {uniqueCountries.map(country => {
+                                const countForCountry = countryCounts[country] || 0;
+                                const displayCount = isRegionLimitEnabled ? Math.min(countForCountry, effectiveIpsPerRegion) : countForCountry;
+                                const isSelected = selectedCountries.has(country);
+                                const flag = getFlagUrl(country);
                                 return (
                                     <button
-                                        key={region}
+                                        key={country}
                                         type="button"
                                         onClick={() => {
-                                            const newSet = new Set(selectedRegions);
-                                            if (newSet.has(region)) {
-                                                newSet.delete(region);
+                                            const newSet = new Set(selectedCountries);
+                                            if (newSet.has(country)) {
+                                                newSet.delete(country);
                                             } else {
-                                                newSet.add(region);
+                                                newSet.add(country);
                                             }
-                                            setSelectedRegions(newSet);
+                                            setSelectedCountries(newSet);
                                         }}
                                         className={`px-2.5 py-1 text-xs font-medium rounded-full border transition-colors ${
                                             isSelected
@@ -271,7 +374,8 @@ export function ScannerResults({ scanResults, onSaveSuccess }: IpScannerResultsA
                                                 : 'bg-gray-100 text-gray-500 border-gray-200 dark:bg-gray-700 dark:text-gray-400 dark:border-gray-600'
                                         }`}
                                     >
-                                        <RegionDisplay colo={region} flagSize="xs" /> <span>({displayCount})</span>
+                                        {flag && <img src={flag} alt={country} className="inline-block w-4 h-3 mr-1 rounded-sm align-text-bottom" />}
+                                        {getCountryName(country)} <span>({displayCount})</span>
                                     </button>
                                 );
                             })}
@@ -337,7 +441,7 @@ export function ScannerResults({ scanResults, onSaveSuccess }: IpScannerResultsA
                             </tr>
                         </thead>
                         <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
-                            {limitedResults.map(({ ip, port, latency, colo, domain, speedMbps, speedFiltered }) => (
+                            {finalResults.map(({ ip, port, latency, colo, domain, speedMbps, speedFiltered }) => (
                                 <tr key={`${ip}:${port}`} className="hover:bg-gray-100 dark:hover:bg-gray-700">
                                     <td className="px-6 py-4 whitespace-nowrap text-sm font-mono text-gray-900 dark:text-white">
                                         {ip}
@@ -363,8 +467,8 @@ export function ScannerResults({ scanResults, onSaveSuccess }: IpScannerResultsA
                 <div className="mt-6 p-4 bg-gray-50 dark:bg-gray-700 rounded-lg border border-gray-200 dark:border-gray-600">
                     <div className="flex items-center gap-3 mb-4">
                         <h3 className="text-lg font-semibold text-gray-700 dark:text-gray-200">保存结果</h3>
-                        <span className="px-2.5 py-0.5 bg-green-100 text-green-800 text-sm font-semibold rounded-full dark:bg-green-900 dark:text-green-300">IP {limitedResults.filter(r => !r.domain).length} 个</span>
-                        <span className="px-2.5 py-0.5 bg-indigo-100 text-indigo-800 text-sm font-semibold rounded-full dark:bg-indigo-900 dark:text-indigo-300">域名 {limitedResults.filter(r => r.domain).length} 个</span>
+                        <span className="px-2.5 py-0.5 bg-green-100 text-green-800 text-sm font-semibold rounded-full dark:bg-green-900 dark:text-green-300">IP {finalResults.filter(r => !r.domain).length} 个</span>
+                        <span className="px-2.5 py-0.5 bg-indigo-100 text-indigo-800 text-sm font-semibold rounded-full dark:bg-indigo-900 dark:text-indigo-300">域名 {finalResults.filter(r => r.domain).length} 个</span>
                     </div>
                     <div className="flex flex-wrap items-center gap-4">
                         <div className="relative" ref={sceneInputRef}>
@@ -431,7 +535,7 @@ export function ScannerResults({ scanResults, onSaveSuccess }: IpScannerResultsA
 
                         <button
                             onClick={handleSave}
-                            disabled={isSaving || filteredResults.length === 0 || !sceneName.trim()}
+                            disabled={isSaving || finalResults.length === 0 || !sceneName.trim()}
                             className="flex items-center bg-blue-600 text-white font-bold py-2 px-6 rounded-md hover:bg-blue-700 transition-colors disabled:bg-gray-400 disabled:cursor-not-allowed"
                         >
                             <Save className="w-4 h-4 mr-2" />

@@ -19,10 +19,14 @@ interface FlatIpItem extends SavedIpData {
     sceneName: string;
 }
 
-export function SavedIpList() {
+interface SavedIpListProps {
+    selectedScenes: Set<string>;
+    onSelectedScenesChange: (scenes: Set<string>) => void;
+}
+
+export function SavedIpList({ selectedScenes, onSelectedScenesChange }: SavedIpListProps) {
     const [items, setItems] = useState<FlatIpItem[]>([]);
     const [loading, setLoading] = useState(false);
-    const [selectedScenes, setSelectedScenes] = useState<Set<string>>(new Set());
     const [selectedItems, setSelectedItems] = useState<Set<string>>(new Set());
     const { showToast } = useToast();
     const { confirm } = useConfirm();
@@ -49,7 +53,7 @@ export function SavedIpList() {
             // 3. 扁平化数组
             const allItems = resultsArray.flat();
             setItems(allItems);
-            setSelectedScenes(new Set(allItems.map(i => i.sceneName)));
+            onSelectedScenesChange(new Set(allItems.map(i => i.sceneName)));
         } catch (e) {
             console.error('Failed to load saved IPs', e);
         } finally {
@@ -252,7 +256,7 @@ export function SavedIpList() {
                                         const newSet = new Set(selectedScenes);
                                         if (newSet.has(scene)) newSet.delete(scene);
                                         else newSet.add(scene);
-                                        setSelectedScenes(newSet);
+                                        onSelectedScenesChange(newSet);
                                     }}
                                     className={`px-2.5 py-1 text-xs font-medium rounded-full border transition-colors ${
                                         isSelected
@@ -268,14 +272,14 @@ export function SavedIpList() {
                         <div className="flex items-center gap-3 ml-auto">
                             <button
                                 type="button"
-                                onClick={() => setSelectedScenes(new Set(uniqueScenes))}
+                                onClick={() => onSelectedScenesChange(new Set(uniqueScenes))}
                                 className="px-3 py-1 text-xs font-medium text-blue-800 bg-blue-100 rounded-full hover:bg-blue-200 dark:bg-blue-900 dark:text-blue-300 dark:hover:bg-blue-800 transition-colors"
                             >
                                 全选
                             </button>
                             <button
                                 type="button"
-                                onClick={() => setSelectedScenes(new Set())}
+                                onClick={() => onSelectedScenesChange(new Set())}
                                 className="px-3 py-1 text-xs font-medium text-gray-800 bg-gray-100 rounded-full hover:bg-gray-200 dark:bg-gray-600 dark:text-gray-300 dark:hover:bg-gray-500 transition-colors"
                             >
                                 清空

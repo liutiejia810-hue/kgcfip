@@ -133,6 +133,43 @@ export const getColoCountry = (colo: string): string | null => {
 };
 
 /**
+ * ISO 3166-1 alpha-2 国家/地区代码 -> 中文名称
+ * 注：后端 functions/api/export.ts 有一份同样的副本，修改时请同步更新
+ */
+export const countryNameMap: { [code: string]: string } = {
+    'us': '美国', 'ca': '加拿大',
+    'hk': '中国香港', 'cn': '中国台湾',
+    'jp': '日本', 'kr': '韩国',
+    'sg': '新加坡', 'th': '泰国', 'my': '马来西亚', 'id': '印度尼西亚',
+    'ph': '菲律宾', 'vn': '越南', 'mm': '缅甸', 'kh': '柬埔寨', 'la': '老挝',
+    'in': '印度', 'lk': '斯里兰卡', 'bd': '孟加拉国', 'np': '尼泊尔', 'pk': '巴基斯坦',
+    'gb': '英国', 'fr': '法国', 'de': '德国', 'nl': '荷兰', 'be': '比利时', 'lu': '卢森堡',
+    'ch': '瑞士', 'at': '奥地利', 'cz': '捷克', 'hu': '匈牙利', 'pl': '波兰',
+    'it': '意大利', 'es': '西班牙', 'pt': '葡萄牙', 'ie': '爱尔兰',
+    'dk': '丹麦', 'se': '瑞典', 'no': '挪威', 'fi': '芬兰',
+    'lv': '拉脱维亚', 'ee': '爱沙尼亚', 'lt': '立陶宛',
+    'gr': '希腊', 'bg': '保加利亚', 'ro': '罗马尼亚', 'rs': '塞尔维亚', 'hr': '克罗地亚', 'si': '斯洛文尼亚',
+    'ua': '乌克兰', 'ru': '俄罗斯', 'tr': '土耳其',
+    'il': '以色列', 'jo': '约旦', 'lb': '黎巴嫩', 'bh': '巴林', 'kw': '科威特',
+    'ae': '阿联酋', 'qa': '卡塔尔', 'om': '阿曼', 'sa': '沙特阿拉伯',
+    'eg': '埃及', 'ma': '摩洛哥', 'tn': '突尼斯', 'dz': '阿尔及利亚',
+    'ng': '尼日利亚', 'gh': '加纳', 'ke': '肯尼亚', 'et': '埃塞俄比亚', 'tz': '坦桑尼亚',
+    'za': '南非', 'zw': '津巴布韦', 'zm': '赞比亚', 'mu': '毛里求斯', 'sc': '塞舌尔',
+    'au': '澳大利亚', 'nz': '新西兰', 'fj': '斐济', 'pf': '法属波利尼西亚', 'gu': '关岛',
+    'br': '巴西', 'ar': '阿根廷', 'cl': '智利', 'pe': '秘鲁', 'co': '哥伦比亚',
+    'ec': '厄瓜多尔', 've': '委内瑞拉', 'uy': '乌拉圭', 'py': '巴拉圭',
+    'pa': '巴拿马', 'cr': '哥斯达黎加', 'gt': '危地马拉', 'sv': '萨尔瓦多', 'mx': '墨西哥',
+};
+
+/**
+ * 将国家/地区代码转换为中文名称；未知返回原代码大写
+ */
+export const getCountryName = (code: string | null | undefined): string => {
+    if (!code) return '未知';
+    return countryNameMap[code.toLowerCase()] || code.toUpperCase();
+};
+
+/**
  * 获取指定 colo 对应的国旗图片 URL (本地静态资源)
  */
 export const getFlagUrl = (colo: string): string | null => {

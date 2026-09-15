@@ -69,6 +69,7 @@ export const onRequestGet: PagesFunction<Env> = async (context) => {
     const url = new URL(request.url);
     const token = url.searchParams.get('token');
     const sceneParam = url.searchParams.get('scene');
+    const scenesParam = url.searchParams.get('scenes');
     const latencyParam = url.searchParams.get('latency');
     const regionParam = url.searchParams.get('region');
     const countParam = url.searchParams.get('count');
@@ -83,7 +84,11 @@ export const onRequestGet: PagesFunction<Env> = async (context) => {
 
     try {
         let keys: { name: string }[] = [];
-        if (sceneParam) {
+        if (scenesParam) {
+            // 多场景：scenes=场景1,场景2（逗号分隔）
+            const names = scenesParam.split(',').map(s => s.trim()).filter(Boolean);
+            keys = names.map(n => ({ name: `scene:${n}` }));
+        } else if (sceneParam) {
             keys = [{ name: `scene:${sceneParam}` }];
         } else {
             const list = await env.IP_KV.list({ prefix: 'scene:' });
