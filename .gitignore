@@ -44,8 +44,6 @@ Thumbs.db
 coverage/
 
 README.md
-# Vite 配置文件临时产物
-vite.config.ts.timestamp-*.mjs
 
 # Vite 配置文件临时产物
 vite.config.ts.timestamp-*.mjs
