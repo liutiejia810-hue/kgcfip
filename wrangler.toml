@@ -9,8 +9,20 @@ binding = "IP_KV"
 id = "你自己的KV ID"
 preview_id = "local_kv_preview_id"
 
+# R2 存储桶绑定：导出「全部 / 按地区分类」的 txt，并以公开直链提供
+# 请先在 Cloudflare → R2 创建桶（下面 bucket_name 与桶名保持一致）
+# 注意：若 Pages 是通过连接 Git 部署的，还需在 Cloudflare 控制台
+#      Pages → 设置 → 函数 → R2 桶绑定 里再绑一次变量名 IP_BUCKET
+[[r2_buckets]]
+binding = "IP_BUCKET"
+bucket_name = "kgcfip-ips"
+preview_bucket_name = "kgcfip-ips-preview"
+
 [vars]
 # 登录密码和APItoken，生产环境请在 Cloudflare Dashboard 设置
 LOGINPW = "LOGINPW"
 APITOKEN = "APITOKEN"
 JWT_SECRET = "JWT_SECRET"
+# R2 公开访问基址（末尾不要带 /），例如 https://pub-xxxx.r2.dev 或自定义域
+# 留空时导出接口只返回文件名、不给直链 URL
+R2_PUBLIC_BASE = ""

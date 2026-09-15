@@ -15,6 +15,15 @@ interface IpScannerResultsAndSaveProps {
 
 const DEFAULT_IPS_PER_REGION = 20;
 
+/** 下载速率配色：越快越绿 */
+function getSpeedColor(speedMbps?: number): string {
+    if (typeof speedMbps !== 'number' || speedMbps < 0) return 'text-gray-400 dark:text-gray-500';
+    if (speedMbps >= 50) return 'text-green-600 dark:text-green-400';
+    if (speedMbps >= 10) return 'text-emerald-600 dark:text-emerald-400';
+    if (speedMbps >= 2) return 'text-yellow-600 dark:text-yellow-400';
+    return 'text-orange-600 dark:text-orange-400';
+}
+
 export function ScannerResults({ scanResults, onSaveSuccess }: IpScannerResultsAndSaveProps) {
     const [ipsPerRegion, setIpsPerRegion] = useState<string>(String(DEFAULT_IPS_PER_REGION));
     const [ipsPerRegionError, setIpsPerRegionError] = useState<string>('');
@@ -34,6 +43,9 @@ export function ScannerResults({ scanResults, onSaveSuccess }: IpScannerResultsA
 
     const uniqueRegions: string[] = Array.from(new Set(scanResults.map(r => r.colo))).filter((r): r is string => !!r).sort();
     const uniquePorts: number[] = Array.from(new Set(scanResults.map(r => r.port))).sort((a, b) => a - b);
+
+    // 本轮结果是否包含下载速率数据（未开启下载测速时不显示「速度」列，避免干扰）
+    const hasSpeedData = scanResults.some(r => typeof r.speedMbps === 'number' && r.speedMbps >= 0);
 
     // 结果首次就绪时，默认将全部地区/端口选入集合（真正全选，而非空集代表全选）
     useEffect(() => {
@@ -318,11 +330,14 @@ export function ScannerResults({ scanResults, onSaveSuccess }: IpScannerResultsA
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">IP/域名</th>
               <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">端口</th>
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">延迟 (ms)</th>
+                                {hasSpeedData && (
+                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">速度 (Mbps)</th>
+                                )}
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">地区</th>
                             </tr>
                         </thead>
                         <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
-                            {limitedResults.map(({ ip, port, latency, colo, domain }) => (
+                            {limitedResults.map(({ ip, port, latency, colo, domain, speedMbps, speedFiltered }) => (
                                 <tr key={`${ip}:${port}`} className="hover:bg-gray-100 dark:hover:bg-gray-700">
                                     <td className="px-6 py-4 whitespace-nowrap text-sm font-mono text-gray-900 dark:text-white">
                                         {ip}
@@ -330,6 +345,14 @@ export function ScannerResults({ scanResults, onSaveSuccess }: IpScannerResultsA
                                     </td>
                                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">{port}</td>
                                     <td className={`px-6 py-4 whitespace-nowrap text-sm font-bold ${getLatencyColor(latency)}`}>{latency > -1 ? `${latency}ms` : 'N/A'}</td>
+                                    {hasSpeedData && (
+                                        <td className={`px-6 py-4 whitespace-nowrap text-sm font-bold ${getSpeedColor(speedMbps)}`}>
+                                            {typeof speedMbps === 'number' && speedMbps >= 0 ? `${speedMbps}` : '-'}
+                                            {speedFiltered && (
+                                                <span className="ml-1.5 px-1.5 py-0.5 text-[10px] rounded bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-300">速率不足</span>
+                                            )}
+                                        </td>
+                                    )}
                                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">{colo ? <RegionDisplay colo={colo} flagSize="sm" /> : '-'}</td>
                                 </tr>
                             ))}

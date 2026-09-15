@@ -15,6 +15,12 @@ export interface ScanResult {
     tcpMs?: number;        // TCP 三次握手耗时
     tlsMs?: number;        // 累计到 TLS 握手完成的耗时
     error?: string;        // 不可用时的原因
+
+    // 下载带宽测速（可选，未开启下载测速时为 undefined）
+    speedMbps?: number;      // 实测下载速率（Mbps）
+    speedBytes?: number;     // 实测下载字节数
+    speedMs?: number;        // 下载阶段耗时（ms）
+    speedFiltered?: boolean; // 是否因速率不达标而被判为不可用
 }
 
 /**

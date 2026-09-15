@@ -39,6 +39,13 @@ export function ScannerConfig({ cfIps, onScanComplete }: IpScannerConfigAndContr
     const [count, setCount] = useState<string>('500');
     const [threads, setThreads] = useState<string>('8');
     const [latencyLimit, setLatencyLimit] = useState<string>('1000');
+
+    // ---------- 下载带宽测速（仅本地 Agent 模式生效）----------
+    const [enableSpeedTest, setEnableSpeedTest] = useState<boolean>(false);
+    const [minSpeedMbps, setMinSpeedMbps] = useState<string>('5');
+    const [speedTestBytes, setSpeedTestBytes] = useState<string>('10000000');
+    const [speedTestTimeoutMs, setSpeedTestTimeoutMs] = useState<string>('8000');
+    const [speedParamError, setSpeedParamError] = useState<string>('');
 /*  */    const [countError, setCountError] = useState<string>('');
     const [threadsError, setThreadsError] = useState<string>('');
     const [latencyLimitError, setLatencyLimitError] = useState<string>('');
@@ -140,7 +147,10 @@ export function ScannerConfig({ cfIps, onScanComplete }: IpScannerConfigAndContr
         return result;
     };
 
-    const validateInputs = (): { countNum: number; threadsNum: number; latencyLimitNum: number } | null => {
+    const validateInputs = (): {
+        countNum: number; threadsNum: number; latencyLimitNum: number;
+        minSpeedMbpsNum: number; speedTestBytesNum: number; speedTestTimeoutMsNum: number;
+    } | null => {
         const countTrim = count.trim();
         const threadsTrim = threads.trim();
         const latencyLimitTrim = latencyLimit.trim();
@@ -163,12 +173,32 @@ export function ScannerConfig({ cfIps, onScanComplete }: IpScannerConfigAndContr
         } else {
             setLatencyLimitError('');
         }
+
+        // 下载带宽测速参数：仅在本机 Agent 模式且开启时才校验
+        if (enableSpeedTest && activeTab === 'local') {
+            const bad: string[] = [];
+            if (!/^\d+$/.test(minSpeedMbps.trim())) bad.push('最低速率');
+            if (!/^\d+$/.test(speedTestBytes.trim()) || parseInt(speedTestBytes.trim(), 10) < 1) bad.push('下载量');
+            if (!/^\d+$/.test(speedTestTimeoutMs.trim()) || parseInt(speedTestTimeoutMs.trim(), 10) < 1) bad.push('下载限时');
+            if (bad.length > 0) {
+                setSpeedParamError(`${bad.join('、')} 需填写有效的整数`);
+                hasError = true;
+            } else {
+                setSpeedParamError('');
+            }
+        } else {
+            setSpeedParamError('');
+        }
+
         if (hasError) return null;
 
         return {
             countNum: parseInt(countTrim, 10),
             threadsNum: parseInt(threadsTrim, 10),
             latencyLimitNum: parseInt(latencyLimitTrim, 10),
+            minSpeedMbpsNum: parseInt(minSpeedMbps.trim(), 10) || 0,
+            speedTestBytesNum: parseInt(speedTestBytes.trim(), 10) || 10000000,
+            speedTestTimeoutMsNum: parseInt(speedTestTimeoutMs.trim(), 10) || 8000,
         };
     };
 
@@ -315,6 +345,10 @@ export function ScannerConfig({ cfIps, onScanComplete }: IpScannerConfigAndContr
         tcpMs: r.tcpMs >= 0 ? r.tcpMs : undefined,
         tlsMs: r.tlsMs >= 0 ? r.tlsMs : undefined,
         error: r.error || undefined,
+        speedMbps: typeof r.speedMbps === 'number' && r.speedMbps >= 0 ? r.speedMbps : undefined,
+        speedBytes: r.speedBytes && r.speedBytes > 0 ? r.speedBytes : undefined,
+        speedMs: r.speedMs && r.speedMs > 0 ? r.speedMs : undefined,
+        speedFiltered: r.speedFiltered || undefined,
     });
 
     /**
@@ -348,6 +382,12 @@ export function ScannerConfig({ cfIps, onScanComplete }: IpScannerConfigAndContr
         targets: { host: string; ip: string; port: number }[],
         threadsNum: number,
         latencyLimitNum: number,
+        speedCfg: {
+            enableSpeedTest: boolean;
+            minSpeedMbps: number;
+            speedTestBytes: number;
+            speedTestTimeoutMs: number;
+        },
         onProgress: (r: ScanResult) => void,
         onComplete: (rs: ScanResult[]) => void,
     ) => {
@@ -360,6 +400,10 @@ export function ScannerConfig({ cfIps, onScanComplete }: IpScannerConfigAndContr
             timeoutMs: 2500,
             latencyLimit: latencyLimitNum,
             source: ipSource,
+            enableSpeedTest: speedCfg.enableSpeedTest,
+            minSpeedMbps: speedCfg.minSpeedMbps,
+            speedTestBytes: speedCfg.speedTestBytes,
+            speedTestTimeoutMs: speedCfg.speedTestTimeoutMs,
         });
 
         let since = 0;
@@ -388,7 +432,14 @@ export function ScannerConfig({ cfIps, onScanComplete }: IpScannerConfigAndContr
             await new Promise((r) => setTimeout(r, 400));
         }
 
-        onComplete(acc.filter((r) => r.isAvailable).sort((a, b) => a.latency - b.latency));
+        // 开启下载测速时按速率降序排列，否则仍按延迟升序
+        const finalList = acc.filter((r) => r.isAvailable);
+        if (speedCfg.enableSpeedTest) {
+            finalList.sort((a, b) => (b.speedMbps ?? -1) - (a.speedMbps ?? -1));
+        } else {
+            finalList.sort((a, b) => a.latency - b.latency);
+        }
+        onComplete(finalList);
     };
 
     const handleScan = async () => {
@@ -462,7 +513,12 @@ export function ScannerConfig({ cfIps, onScanComplete }: IpScannerConfigAndContr
                     prepared.resolvedMap,
                     ipSource === 'third' ? 0 : selectedPort,
                 );
-                await runAgentScan(agentTargets, val.threadsNum, val.latencyLimitNum, onProgress, onComplete);
+                await runAgentScan(agentTargets, val.threadsNum, val.latencyLimitNum, {
+                    enableSpeedTest,
+                    minSpeedMbps: val.minSpeedMbpsNum,
+                    speedTestBytes: val.speedTestBytesNum,
+                    speedTestTimeoutMs: val.speedTestTimeoutMsNum,
+                }, onProgress, onComplete);
             } else {
                 const scanner = new BatchScanner(
                     targets,
@@ -734,6 +790,70 @@ export function ScannerConfig({ cfIps, onScanComplete }: IpScannerConfigAndContr
                                     disabled={isScanning || agentChecking}
                                 />
                                 <span className="text-xs text-gray-400 dark:text-gray-500">默认 {DEFAULT_AGENT_PORT}</span>
+                            </div>
+
+                            {/* 下载带宽测速设置（仅本地 Agent 模式可用） */}
+                            <div className="mb-3 rounded-lg border border-gray-200 dark:border-gray-600 bg-gray-50 dark:bg-gray-900/30 p-3">
+                                <label className="flex items-center gap-2 cursor-pointer">
+                                    <input
+                                        type="checkbox"
+                                        checked={enableSpeedTest}
+                                        onChange={(e) => setEnableSpeedTest(e.target.checked)}
+                                        disabled={isScanning || isPreparing}
+                                        className="h-4 w-4 text-purple-600 rounded border-gray-300 focus:ring-purple-500 disabled:opacity-50"
+                                    />
+                                    <span className="text-sm font-medium text-gray-700 dark:text-gray-300">开启下载带宽测速</span>
+                                    <span className="text-xs text-gray-400 dark:text-gray-500">
+                                        （对延迟达标的 IP 逐个下载数据测真实速率，更慢但结果更有用）
+                                    </span>
+                                </label>
+
+                                {enableSpeedTest && (
+                                    <>
+                                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 mt-2.5">
+                                            <div>
+                                                <label htmlFor="min-speed" className="block text-xs text-gray-600 dark:text-gray-400 mb-1">最低速率 (Mbps)</label>
+                                                <input
+                                                    id="min-speed"
+                                                    type="text"
+                                                    inputMode="numeric"
+                                                    value={minSpeedMbps}
+                                                    onChange={(e) => setMinSpeedMbps(e.target.value.replace(/[^\d]/g, ''))}
+                                                    disabled={isScanning || isPreparing}
+                                                    className="w-full px-2 py-1.5 text-xs font-mono rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100 focus:ring-2 focus:ring-purple-500 focus:border-transparent outline-none disabled:opacity-50"
+                                                />
+                                            </div>
+                                            <div>
+                                                <label htmlFor="speed-bytes" className="block text-xs text-gray-600 dark:text-gray-400 mb-1">下载量 (字节)</label>
+                                                <input
+                                                    id="speed-bytes"
+                                                    type="text"
+                                                    inputMode="numeric"
+                                                    value={speedTestBytes}
+                                                    onChange={(e) => setSpeedTestBytes(e.target.value.replace(/[^\d]/g, ''))}
+                                                    disabled={isScanning || isPreparing}
+                                                    className="w-full px-2 py-1.5 text-xs font-mono rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100 focus:ring-2 focus:ring-purple-500 focus:border-transparent outline-none disabled:opacity-50"
+                                                />
+                                            </div>
+                                            <div>
+                                                <label htmlFor="speed-timeout" className="block text-xs text-gray-600 dark:text-gray-400 mb-1">下载限时 (ms)</label>
+                                                <input
+                                                    id="speed-timeout"
+                                                    type="text"
+                                                    inputMode="numeric"
+                                                    value={speedTestTimeoutMs}
+                                                    onChange={(e) => setSpeedTestTimeoutMs(e.target.value.replace(/[^\d]/g, ''))}
+                                                    disabled={isScanning || isPreparing}
+                                                    className="w-full px-2 py-1.5 text-xs font-mono rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100 focus:ring-2 focus:ring-purple-500 focus:border-transparent outline-none disabled:opacity-50"
+                                                />
+                                            </div>
+                                        </div>
+                                        <p className="text-xs text-gray-400 dark:text-gray-500 mt-2">
+                                            速率低于「最低速率」的 IP 会被判为不可用；填 0 表示不限速门槛，只记录速率不筛掉。
+                                        </p>
+                                    </>
+                                )}
+                                {speedParamError && <p className="text-red-500 text-xs mt-1.5">{speedParamError}</p>}
                             </div>
 
                             {!agentProbe?.online && (

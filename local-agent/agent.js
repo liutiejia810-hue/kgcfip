@@ -30,7 +30,7 @@ const os = require('os');
 const http = require('http');
 const crypto = require('crypto');
 
-const VERSION = '1.1.0';
+const VERSION = '1.2.0';
 const SCRIPT_DIR = __dirname;
 const CONFIG_PATH = path.join(SCRIPT_DIR, 'config.json');
 
@@ -50,6 +50,13 @@ const DEFAULTS = {
   sni: 'speed.cloudflare.com',
   httpHost: 'speed.cloudflare.com',
   tracePath: '/cdn-cgi/trace',
+
+  // ---- 下载带宽测速（可选，网页下发时可覆盖）----
+  enableSpeedTest: false,      // 是否开启下载测速
+  speedPath: '/__down',        // Cloudflare 官方测速端点，返回指定字节数的随机数据
+  speedTestBytes: 10000000,    // 单 IP 下载量（字节），默认 10MB
+  speedTestTimeoutMs: 8000,    // 单 IP 下载限时（毫秒），到点即按已收字节折算速率
+  minSpeedMbps: 0,             // 最低速率门槛（Mbps），0 表示不限；低于门槛判为不可用
 };
 
 // ==================================================================
@@ -227,6 +234,10 @@ function measureLatency(host, port, opt) {
       tlsMs: -1,
       httpMs: -1,
       latency: -1,
+      speedMbps: -1,        // 下载速率（Mbps），未开启测速或失败时为 -1
+      speedBytes: 0,        // 实测下载字节数
+      speedMs: -1,          // 下载阶段耗时（ms）
+      speedFiltered: false, // 是否因速率不达标被判为不可用
       colo: '',
       loc: '',
       status: 0,
@@ -307,6 +318,135 @@ function measureLatency(host, port, opt) {
             done();
           })
           .catch(done);
+      });
+    });
+  });
+}
+
+// ==================================================================
+// 下载带宽测速（TCP -> TLS -> 官方 __down 端点，按吞吐折算 Mbps）
+// ------------------------------------------------------------------
+// 原理：对每个 IP 单独建立 TLS（servername=speed.cloudflare.com），请求
+//       Cloudflare 官方测速端点返回指定大小的随机数据，统计「首字节 →
+//       末字节」之间收到的字节数与耗时，折算成 Mbps。
+//       到达限时仍未下完时，用已收字节按限时折算，避免慢节点拖死任务。
+// ==================================================================
+function measureDownloadSpeed(host, port, opt) {
+  return new Promise((resolve) => {
+    const out = {
+      mbps: -1,
+      bytes: 0,
+      ms: -1,
+      status: 0,
+      error: '',
+    };
+
+    let settled = false;
+    let tcpSocket = null;
+    let tlsSocket = null;
+    let timer = null;
+
+    const cleanup = () => {
+      if (timer) clearTimeout(timer);
+      try { if (tlsSocket) tlsSocket.destroy(); } catch (_) { /* noop */ }
+      try { if (tcpSocket) tcpSocket.destroy(); } catch (_) { /* noop */ }
+    };
+    const done = (error) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      if (error && !out.error) out.error = String(error.message || error);
+      resolve(out);
+    };
+
+    let buf = Buffer.alloc(0);
+    let headersDone = false;
+    let headEnd = -1;
+    let contentLength = null;
+    let started = false;
+    let startMs = 0;
+    let bytes = 0;
+
+    /** 用「首字节 → 当前」的耗时与字节数折算 Mbps */
+    const calcThroughput = () => {
+      if (!started || bytes <= 0) return;
+      const elapsedSec = (now() - startMs) / 1000;
+      if (elapsedSec <= 0) return;
+      out.ms = rint(now() - startMs);
+      out.bytes = bytes;
+      out.mbps = Number(((bytes * 8) / elapsedSec / 1e6).toFixed(2));
+    };
+
+    const isIPv6 = host.includes(':');
+    const connectHost = isIPv6 ? host.replace(/^\[|\]$/g, '') : host;
+
+    tcpSocket = net.connect({ host: connectHost, port, family: isIPv6 ? 6 : 4 });
+    tcpSocket.setTimeout(opt.speedTestTimeoutMs);
+    tcpSocket.on('timeout', () => done(new Error('speed tcp timeout')));
+    tcpSocket.on('error', (e) => done(e));
+
+    tcpSocket.on('connect', () => {
+      try {
+        tlsSocket = tls.connect({
+          socket: tcpSocket,
+          servername: opt.sni,
+          rejectUnauthorized: false,
+          ALPNProtocols: ['http/1.1'],
+        });
+      } catch (e) {
+        return done(e);
+      }
+      tlsSocket.setTimeout(opt.speedTestTimeoutMs);
+      tlsSocket.on('timeout', () => { calcThroughput(); done(new Error('speed tls timeout')); });
+      tlsSocket.on('error', (e) => { calcThroughput(); done(e); });
+
+      tlsSocket.on('secureConnect', () => {
+        const reqPath = `${opt.speedPath}?bytes=${opt.speedTestBytes}`;
+
+        tlsSocket.on('data', (chunk) => {
+          buf = Buffer.concat([buf, chunk]);
+
+          if (!headersDone) {
+            headEnd = buf.indexOf('\r\n\r\n');
+            if (headEnd === -1) return; // 响应头尚未收全
+            headersDone = true;
+            const lines = buf.slice(0, headEnd).toString('latin1').split('\r\n');
+            out.status = parseInt(lines[0].split(' ')[1], 10) || 0;
+            for (const line of lines.slice(1)) {
+              const idx = line.indexOf(':');
+              if (idx > 0 && line.slice(0, idx).toLowerCase() === 'content-length') {
+                contentLength = parseInt(line.slice(idx + 1).trim(), 10);
+              }
+            }
+            if (out.status !== 200) {
+              out.error = `SPEED HTTP ${out.status}`;
+              return done();
+            }
+          }
+
+          bytes = Math.max(0, buf.length - (headEnd + 4));
+          if (!started && bytes > 0) { started = true; startMs = now(); }
+
+          if (contentLength !== null && bytes >= contentLength) {
+            calcThroughput();
+            done();
+          }
+        });
+
+        // 限时保护：到点即按已收字节折算，已有速率就不算失败
+        timer = setTimeout(() => {
+          calcThroughput();
+          if (out.mbps > 0) done();
+          else done(new Error('speed timeout'));
+        }, opt.speedTestTimeoutMs);
+
+        tlsSocket.write(
+          `GET ${reqPath} HTTP/1.1\r\n` +
+          `Host: ${opt.httpHost}\r\n` +
+          `User-Agent: kgcfip-agent/${VERSION}\r\n` +
+          `Accept: */*\r\n` +
+          `Connection: close\r\n\r\n`
+        );
       });
     });
   });
@@ -435,6 +575,15 @@ async function startScan(payload, cfg) {
     sni: payload.sni || cfg.sni,
     httpHost: payload.httpHost || cfg.httpHost,
     tracePath: cfg.tracePath,
+
+    // ---- 下载带宽测速 ----
+    enableSpeedTest: payload.enableSpeedTest !== undefined
+      ? !!payload.enableSpeedTest
+      : !!cfg.enableSpeedTest,
+    speedPath: payload.speedPath || cfg.speedPath,
+    speedTestBytes: Number(payload.speedTestBytes) || cfg.speedTestBytes || 10000000,
+    speedTestTimeoutMs: Number(payload.speedTestTimeoutMs) || cfg.speedTestTimeoutMs || 8000,
+    minSpeedMbps: Number(payload.minSpeedMbps) || Number(cfg.minSpeedMbps) || 0,
   };
   if (opt.threads < 1) opt.threads = 1;
   if (opt.threads > 512) opt.threads = 512;
@@ -475,6 +624,24 @@ async function startScan(payload, cfg) {
           // 回显 host：域名源要保留域名，而不是解析出的 IP
           r.host = t.host;
           r.port = t.port;
+
+          // 下载带宽测速：只对延迟已通过的 IP 做，避免在不可用节点上浪费下载流量。
+          // 结果与延迟合并为同一条记录后一次性入队，前端轮询语义保持不变。
+          if (opt.enableSpeedTest && r.ok) {
+            const sp = await measureDownloadSpeed(t.ip, t.port, opt);
+            r.speedMbps = sp.mbps;
+            r.speedBytes = sp.bytes;
+            r.speedMs = sp.ms;
+            if (sp.error && !r.error) r.error = sp.error;
+
+            // 最低速率门槛：低于阈值直接判为不可用
+            if (opt.minSpeedMbps > 0 && (r.speedMbps < 0 || r.speedMbps < opt.minSpeedMbps)) {
+              r.ok = false;
+              r.speedFiltered = true;
+              if (!r.error) r.error = `速率不达标（${r.speedMbps} Mbps < ${opt.minSpeedMbps} Mbps）`;
+            }
+          }
+
           scan.results.push(r);
           scan.done = scan.results.length;
           return r;
@@ -624,6 +791,12 @@ ${C.bold}测速参数（网页下发时以网页参数为准）${C.reset}
   --threads <数量>       并发数，默认 32
   --timeout <毫秒>       单阶段超时，默认 2500
   --latencyLimit <ms>    延迟上限，超过视为不可用，默认 1000
+
+${C.bold}下载带宽测速${C.reset}
+  --enable-speed-test         开启下载测速（默认关闭）
+  --speed-test-bytes <字节>   单个 IP 的下载量，默认 10000000（10MB）
+  --speed-test-timeout <毫秒> 单 IP 下载限时，到点按已收字节折算，默认 8000
+  --min-speed-mbps <Mbps>     最低速率门槛，低于该值判为不可用，0 表示不限
 
 ${C.bold}示例${C.reset}
   ${C.cyan}# 启动本地服务（网页直连）${C.reset}

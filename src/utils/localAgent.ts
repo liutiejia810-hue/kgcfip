@@ -42,6 +42,12 @@ export interface AgentResult {
     error: string;
     status: number;
     ts: number;
+
+    // 下载带宽测速（可选）
+    speedMbps?: number;      // 实测下载速率（Mbps），未开启测速时为 -1
+    speedBytes?: number;     // 实测下载字节数
+    speedMs?: number;        // 下载阶段耗时（ms）
+    speedFiltered?: boolean; // 是否因速率不达标被判为不可用
 }
 
 export interface AgentProgress {
@@ -66,6 +72,12 @@ export interface AgentScanPayload {
     sni?: string;
     httpHost?: string;
     source?: string;
+
+    // 下载带宽测速（可选）
+    enableSpeedTest?: boolean;      // 是否开启下载带宽测速
+    speedTestBytes?: number;        // 单 IP 下载量（字节）
+    speedTestTimeoutMs?: number;    // 单 IP 下载限时（毫秒）
+    minSpeedMbps?: number;          // 最低速率门槛（Mbps），0 = 不限
 }
 
 export type AgentProbeResult =
