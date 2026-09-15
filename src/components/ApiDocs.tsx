@@ -31,10 +31,14 @@ export function ApiDocs({ apiToken }: ApiDocsProps) {
         setExportError('');
         try {
             const res = await fetch(`${window.location.origin}/api/export?token=${apiToken}`);
+            const status = res.status;
             const data = (await res.json().catch(() => ({}))) as {
                 ok?: boolean; error?: string; total?: number; files?: ExportFile[];
             };
-            if (!res.ok || !data.ok) throw new Error(data.error || `导出失败（HTTP ${res.status}）`);
+            if (!res.ok || !data.ok) {
+                if (status === 401) throw new Error('鉴权失败（HTTP 401）：请退出登录后重新登录再试');
+                throw new Error(data.error || `导出失败（HTTP ${status}）`);
+            }
 
             setExportFiles(data.files || []);
             setExportTotal(data.total ?? null);

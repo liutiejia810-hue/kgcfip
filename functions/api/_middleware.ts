@@ -9,8 +9,13 @@ export const onRequest: PagesFunction<Env> = async (context) => {
     const { request, env, next } = context;
     const url = new URL(request.url);
 
-    // 公共接口：登录接口不需要鉴权；getips 接口使用 URL 参数鉴权，也跳过此处的 Bearer 检查
-    if (url.pathname === '/api/login' || url.pathname === '/api/getips') {
+    // 公共接口：登录接口不需要鉴权；
+    // getips 与 export 使用 URL 参数（?token=APITOKEN）自行鉴权，因此跳过此处的 Bearer 检查
+    if (
+        url.pathname === '/api/login' ||
+        url.pathname === '/api/getips' ||
+        url.pathname === '/api/export'
+    ) {
         return await next();
     }
 
